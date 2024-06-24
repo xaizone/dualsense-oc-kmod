@@ -3,15 +3,15 @@
 #include <linux/kernel.h>
 #include <linux/usb.h>
 
-#define GCADAPTER_VID 0x057e
-#define GCADAPTER_PID 0x0337
+#define DUALSENSE_VID 0x054c
+#define DUALSENSE_PID 0x0ce6
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Hannes Mann");
-MODULE_DESCRIPTION("Filter kernel module to set the polling rate of the Wii U/Mayflash GameCube Adapter to a custom value.");
-MODULE_VERSION("1.4");
+MODULE_AUTHOR("xaizone");
+MODULE_DESCRIPTION("Filter kernel module to set the polling rate of the DualSense (PS5) controller over XHCI.");
+MODULE_VERSION("1.0");
 
-static struct usb_device* adapter_device = NULL;
+static struct usb_device* controller = NULL;
 
 static unsigned short restore_interval = 8;
 static unsigned short configured_interval = 1;
@@ -20,19 +20,19 @@ static unsigned short configured_interval = 1;
 static unsigned short patch_endpoints(unsigned short interval) {
 	static unsigned short old_interval = 8;
 
-	if(adapter_device != NULL && adapter_device->actconfig != NULL) {
-		struct usb_interface* interface = adapter_device->actconfig->interface[0];
+	if(controller != NULL && controller->actconfig != NULL) {
+		struct usb_interface* interface = controller->actconfig->interface[0];
 
 		if(interface != NULL) {
 			for(unsigned int altsetting = 0; altsetting < interface->num_altsetting; altsetting++) {
 				struct usb_host_interface* altsettingptr = &interface->altsetting[altsetting];
 
 				for(__u8 endpoint = 0; endpoint < altsettingptr->desc.bNumEndpoints; endpoint++) {
-					if(altsettingptr->endpoint[endpoint].desc.bEndpointAddress == 0x81 || altsettingptr->endpoint[endpoint].desc.bEndpointAddress == 0x02) {
+					if(altsettingptr->endpoint[endpoint].desc.bEndpointAddress == 0x82 || altsettingptr->endpoint[endpoint].desc.bEndpointAddress == 0x01) {
 						old_interval = altsettingptr->endpoint[endpoint].desc.bInterval;
 						altsettingptr->endpoint[endpoint].desc.bInterval = interval;
 
-						printk(KERN_INFO "gcadapter_oc: bInterval value of endpoint 0x%.2x set to %u.\n", altsettingptr->endpoint[endpoint].desc.bEndpointAddress, interval);
+						printk(KERN_INFO "dualsense_oc: bInterval value of endpoint 0x%.2x set to %u.\n", altsettingptr->endpoint[endpoint].desc.bEndpointAddress, interval);
 					}
 				}
 			}
@@ -42,17 +42,17 @@ static unsigned short patch_endpoints(unsigned short interval) {
 			 * This is required by the kernel documentation but it seems that some systems won't let you lock the USB device.
 			 * Older versions before 1.2 never called this function and still worked so we proceed even if locking fails.
 			 */
-			int ret = usb_lock_device_for_reset(adapter_device, NULL);
+			int ret = usb_lock_device_for_reset(controller, NULL);
 			if(ret) {
-				printk(KERN_ERR "gcadapter_oc: Warning! Failed to acquire lock for USB device (error: %d). Resetting device anyway...\n", ret);
+				printk(KERN_ERR "dualsense_oc: Warning! Failed to acquire lock for USB device (error: %d). Resetting device anyway...\n", ret);
 			}
 			/* TODO: It might be possible to make the new bInterval value take effect without calling usb_reset_device? */
-			if(usb_reset_device(adapter_device)) {
-				printk(KERN_ERR "gcadapter_oc: Could not reset device (error: %d). bInterval value was NOT changed.\n", ret);
+			if(usb_reset_device(controller)) {
+				printk(KERN_ERR "dualsense_oc: Could not reset device (error: %d). bInterval value was NOT changed.\n", ret);
 			}
 			/* Only unlock the device if usb_lock_device_for_reset succeeded. */
 			if(!ret) {
-				usb_unlock_device(adapter_device);
+				usb_unlock_device(controller);
 			}
 		}
 	}
@@ -65,18 +65,18 @@ static int on_usb_notify(struct notifier_block* self, unsigned long action, void
 
 	switch(action) {
 		case USB_DEVICE_ADD:
-			if(device->descriptor.idVendor == GCADAPTER_VID && device->descriptor.idProduct == GCADAPTER_PID && adapter_device == NULL) {
-				adapter_device = device;
-				printk(KERN_INFO "gcadapter_oc: Adapter connected\n");
+			if(device->descriptor.idVendor == DUALSENSE_VID && device->descriptor.idProduct == DUALSENSE_PID && controller == NULL) {
+				controller = device;
+				printk(KERN_INFO "dualsense_oc: Controller connected\n");
 
 				restore_interval = patch_endpoints(configured_interval);
 			}
 			break;
 
 		case USB_DEVICE_REMOVE:
-			if(adapter_device == device) {
-				adapter_device = NULL;
-				printk(KERN_INFO "gcadapter_oc: Adapter disconnected\n");
+			if(controller == device) {
+				controller = NULL;
+				printk(KERN_INFO "dualsense_oc: Controller disconnected\n");
 			}
 			break;
 	}
@@ -87,9 +87,9 @@ static int on_usb_notify(struct notifier_block* self, unsigned long action, void
 static struct notifier_block usb_nb = { .notifier_call = on_usb_notify };
 
 static int usb_device_cb(struct usb_device* device, void* data) {
-	if(device->descriptor.idVendor == GCADAPTER_VID && device->descriptor.idProduct == GCADAPTER_PID && adapter_device == NULL) {
-		adapter_device = device;
-		printk(KERN_INFO "gcadapter_oc: Adapter connected\n");
+	if(device->descriptor.idVendor == DUALSENSE_VID && device->descriptor.idProduct == DUALSENSE_PID && controller == NULL) {
+		controller = device;
+		printk(KERN_INFO "dualsense_oc: Controller connected\n");
 
 		restore_interval = patch_endpoints(configured_interval);
 	}
@@ -99,12 +99,12 @@ static int usb_device_cb(struct usb_device* device, void* data) {
 
 static int __init on_module_init(void) {
 	if(configured_interval > 255) {
-		printk(KERN_WARNING "gcadapter_oc: Invalid interval parameter specified.\n");
+		printk(KERN_WARNING "dualsense_oc: Invalid interval parameter specified.\n");
 		configured_interval = 255;
 	}
 
 	if(configured_interval == 0) {
-		printk(KERN_WARNING "gcadapter_oc: Invalid interval parameter specified.\n");
+		printk(KERN_WARNING "dualsense_oc: Invalid interval parameter specified.\n");
 		configured_interval = 1;
 	}
 
@@ -115,7 +115,7 @@ static int __init on_module_init(void) {
 }
 
 static void __exit on_module_exit(void) {
-	if(adapter_device != NULL) {
+	if(controller != NULL) {
 		patch_endpoints(restore_interval);
 	}
 
@@ -130,11 +130,11 @@ static int on_interval_changed(const char* value, const struct kernel_param* kp)
 
 	if(!ret) {
 		if(configured_interval > 255) {
-			printk(KERN_WARNING "gcadapter_oc: Invalid interval parameter specified.\n");
+			printk(KERN_WARNING "dualsense_oc: Invalid interval parameter specified.\n");
 			configured_interval = 255;
 		}
 		else if(configured_interval == 0) {
-			printk(KERN_WARNING "gcadapter_oc: Invalid interval parameter specified.\n");
+			printk(KERN_WARNING "dualsense_oc: Invalid interval parameter specified.\n");
 			configured_interval = 1;
 		}
 
